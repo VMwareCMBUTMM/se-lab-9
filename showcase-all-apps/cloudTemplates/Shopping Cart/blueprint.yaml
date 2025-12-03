@@ -1,0 +1,412 @@
+formatVersion: 1
+name: Shopping Cart App
+description: Shopping Cart App with Web and Database servers
+version: 7
+inputs:
+  sql_vm_name:
+    type: string
+    title: MySQL Virtual Machine Name
+    description: Enter a name for the SQL Virtual Machine
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+  web_vm_name:
+    type: string
+    title: Apache Virtual Machine Name
+    description: Enter a name for the Web Virtual Machine
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+  vm_size:
+    type: string
+    title: Virtual Machine Size
+    description: Select a Virtual Machine Size
+    oneOf:
+      - title: xSmall (2 vCPUs - 2 GiB MEM)
+        const: best-effort-xsmall
+      - title: Small (2 vCPUs - 4 GiB MEM)
+        const: best-effort-small
+      - title: Medium (2 vCPUs - 8 GiB MEM)
+        const: best-effort-medium
+      - title: Large (4 vCPUs - 16 GiB MEM)
+        const: best-effort-large
+  username:
+    type: string
+    description: The username you would like to have for the installation.
+    default: demouser
+    title: System Admin Account Username
+  password:
+    type: string
+    description: The password you would like to use for the ocuser account.
+    title: OpenCart Admin Account Password
+    default: VMware1!
+    pattern: '[a-z0-9A-Z@#$]+'
+    encrypted: true
+resources:
+  Namespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${env.projectName == "default-project" ? propgroup.namespace.development :propgroup.namespace.production}
+      existing: true
+  SSH_SQL_LB:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachineService
+        metadata:
+          name: ${input.sql_vm_name}
+        spec:
+          selector:
+            vm-lb-selector: ${input.sql_vm_name}
+          type: LoadBalancer
+          ports:
+            - name: ssh
+              protocol: TCP
+              port: 22
+              targetPort: 22
+            - name: mysql
+              protocol: TCP
+              port: 3306
+              targetPort: 3306
+  SSH_HTTP_LB:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachineService
+        metadata:
+          name: ${input.web_vm_name}
+        spec:
+          selector:
+            vm-lb-selector: ${input.web_vm_name}
+          type: LoadBalancer
+          ports:
+            - name: ssh
+              protocol: TCP
+              port: 22
+              targetPort: 22
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: 80
+  MYSQL_VM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - MySQL_BOOTSTRAP
+      - SSH_SQL_LB
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachine
+        metadata:
+          name: ${input.sql_vm_name}
+          labels:
+            vm-selector: ${input.sql_vm_name}
+            vm-lb-selector: ${input.sql_vm_name}
+        spec:
+          className: ${input.vm_size}
+          #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
+          imageName: vmi-a80040a172e983645
+          storageClass: cluster-wld01-01a-vsan-storage-policy
+          powerState: PoweredOn
+          network:
+            domainName: showcase.tmm.broadcom.lab
+            nameservers:
+              - 10.138.241.1
+              - 10.138.241.2
+            searchDomains:
+              - showcase.tmm.broadcom.lab
+          bootstrap:
+            cloudInit:
+              rawCloudConfig:
+                name: ${input.sql_vm_name}-bootstrap-secret
+                key: user-data
+  Web_VM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - SSH_SQL_LB
+      - Web_BOOTSTRAP
+      - SSH_HTTP_LB
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachine
+        metadata:
+          name: ${input.web_vm_name}
+          labels:
+            vm-selector: ${input.web_vm_name}
+            vm-lb-selector: ${input.web_vm_name}
+        spec:
+          className: ${input.vm_size}
+          #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
+          imageName: vmi-a80040a172e983645
+          storageClass: cluster-wld01-01a-vsan-storage-policy
+          powerState: PoweredOn
+          network:
+            domainName: showcase.tmm.broadcom.lab
+            nameservers:
+              - 10.138.241.1
+              - 10.138.241.2
+            searchDomains:
+              - showcase.tmm.broadcom.lab
+          bootstrap:
+            cloudInit:
+              rawCloudConfig:
+                name: ${input.web_vm_name}-bootstrap-secret
+                key: user-data
+  MySQL_BOOTSTRAP:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${input.sql_vm_name}-bootstrap-secret
+          labels:
+            vm-selector: ${input.sql_vm_name}
+        stringData:
+          user-data: |
+            #cloud-config
+            hostname: ${self.resourceName}
+            package_upgrade: true
+            package_reboot_if_required: true
+
+            apt_source:
+              - source: deb http://archive.ubuntu.com/ubuntu main universe multiverse restricted
+
+            packages:
+              - mysql-server-5.7
+              - mysql-client
+              - unzip
+              - open-vm-tools
+
+            ssh_pwauth: true
+
+            users:
+              - name: ${input.username}
+                lock_passwd: false
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: wheel, sudo, admin
+                shell: /bin/bash
+                
+              - name: ocuser
+                lock_passwd: false
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: wheel, sudo, admin
+                shell: /bin/bash
+
+            chpasswd:
+              expire: false
+              users:
+                - name: ${input.username}
+                  password: ${input.password}
+                  type: text
+                  
+                - name: ocuser
+                  password: ${input.password}
+                  type: text
+              
+            write_files:
+              - path: /etc/cron.hourly/oc_cleanup
+                owner: root
+                permissions: '0777'
+                content: "mysql -e 'use opencart; create table oc_session_copy like oc_session; drop table oc_session; rename table oc_session_copy to oc_session;'"
+              
+              - path: /etc/hosts
+                content: |
+                  127.0.0.1 ${self.resourceName}
+                  185.125.190.82 security.ubuntu.com
+                  185.125.190.82 archive.ubuntu.com
+                append: true
+
+            runcmd:
+              - export DEBIAN_FRONTEND=noninteractive
+              - USER=ocuser
+              - PASS=${input.password}
+              - echo "mysql-server-5.7 mysql-server/root_password password root" | sudo debconf-set-selections
+              - echo "mysql-server-5.7 mysql-server/root_password_again password root" | sudo debconf-set-selections
+              - echo "[client]" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "user=root" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "password=root" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "user=ocuser" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "password=$PASS" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - sed -i 's/#slow/slow/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+              - sed -i 's/#long_query_time/long_query_time/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+              - sed -i 's/bind-address/#bind-address/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+              - systemctl restart mysql
+              - mysql -u root -e "GRANT ALL ON *.* TO '$USER'@'%' IDENTIFIED BY '$PASS'"
+              - mysql -u root -e 'CREATE DATABASE opencart'
+              - mysql -u root -e 'USE opencart'
+              - mysql -u root -e 'flush privileges'
+              ### Cloud-init script for agents
+              #----------------------- Install Telegraf Agent  -------------------------#
+              # download helper script
+              - cd /tmp
+              - wget --no-check-certificate https://10.138.242.69/downloads/salt/telegraf-utils.sh
+              - chmod 755 telegraf-utils.sh
+              #Install the agent
+              - ./telegraf-utils.sh product-managed -c 10.138.242.69 -t 37e94bc0-af7e-44eb-96f6-11fc27986339::b505175a-ce22-4b82-a3b0-e830997dfd2d -v 10.138.242.65 -k 1
+              #--------------------------------------------------------------------------#
+              #------------------------- Install Logs Agent  ----------------------------#
+              # download helper script
+              - cd /tmp
+              - wget --quiet http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              #Install the agent
+              - dpkg -i vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - export logs_ip="opslogs-a.vcf02.showcase.tmm.broadcom.lab"
+              - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
+              - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
+              - systemctl restart liagentd
+              - systemctl enable liagentd
+              #-------------------------------------------------------------------------#
+              - echo 'Cloud-init is done!' >> /tmp/finished.txt
+  Web_BOOTSTRAP:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${input.web_vm_name}-bootstrap-secret
+          labels:
+            vm-selector: ${input.web_vm_name}
+        stringData:
+          user-data: |
+            #cloud-config
+            hostname: ${self.resourceName}
+            package_upgrade: true
+            package_reboot_if_required: true
+
+            apt_source:
+              - source: deb http://archive.ubuntu.com/ubuntu main universe multiverse restricted
+
+            packages:
+              - apache2
+              - php
+              - php-mysql
+              - libapache2-mod-php
+              - php-cli
+              - php-common
+              - php-intl
+              - php-gd
+              - php-mbstring
+              - php-xml
+              - php-zip
+              - php-curl
+              - php-xmlrpc
+              - mysql-server-5.7
+              - unzip
+              - open-vm-tools
+
+            ssh_pwauth: true
+
+
+            users:
+              - name: ${input.username}
+                lock_passwd: false
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: sudo
+                shell: /bin/bash
+
+              - name: ocuser
+                lock_passwd: false
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: wheel, sudo, admin
+                shell: /bin/bash
+
+            chpasswd:
+              expire: false
+              users:
+                - name: ${input.username}
+                  password: ${input.password}
+                  type: text
+              
+                - name: ocuser
+                  password: ${input.password}
+                  type: text
+
+            write_files:
+              - path: /etc/cron.hourly/oc_web_cleanup
+                owner: root
+                permissions: '0777'
+                content: "mysql -u ocuser -h ${resource.SSH_SQL_LB.object.status.loadBalancer.ingress[0].ip} -e 'source /var/www/opencart/install/opencart.sql'"
+                
+              - path: /etc/hosts
+                content: |
+                  127.0.0.1 ${self.resourceName}
+                  185.125.190.82 security.ubuntu.com
+                  185.125.190.82 archive.ubuntu.com
+                append: true
+
+            runcmd:
+              - systemctl stop apache2
+              - USER=ocuser
+              - PASS=${input.password}
+                #----------------------- Install Packages if not already installed  -------------------------#
+              #- systemctl list-units --type=service | grep apache2.service || apt-get install -y apache2 php php-mysql libapache2-mod-php php-cli php-common php-intl php-gd php-mbstring php-xml php-zip php-curl php-xmlrpc mysql-server-5.7 unzip open-vm-tools
+              - wget --quiet -P /tmp/ http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/opencart-demo.zip
+              - unzip -d /tmp /tmp/opencart-demo.zip
+              - mv /tmp/opencart-demo-master/ /var/www/opencart
+              - chown -R www-data.www-data /var/www/opencart
+              - chmod -R 775 /var/www/opencart
+              - tee /etc/apache2/sites-available/opencart.conf > /dev/null << EOF
+              - <VirtualHost *:80>
+              -   ServerName www.opencart.cmbu.local
+              -   DocumentRoot /var/www/opencart
+              -   <Directory /var/www/opencart/>
+              -     AllowOverride All
+              -     allow from all
+              -   </Directory>
+              - </VirtualHost>
+              - EOF
+              - cd /etc/apache2/sites-available/
+              - a2ensite opencart.conf
+              - a2dissite 000-default.conf
+              - echo "[client]" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "user=ocuser" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "password=$PASS" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+
+                #----------------------- Set Website IP Address -----------------------#
+              - export mysqlip=${resource.SSH_SQL_LB.object.status.loadBalancer.ingress[0].ip}
+              - export ip4=${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}
+                #----------------------------------------------------------------------#
+
+              - mysql -u $USER -h $mysqlip -e 'source /var/www/opencart/install/opencart.sql'
+              - mysql -u $USER -h $mysqlip -e "INSERT INTO oc_user (user_id,user_group_id,username,password,salt,firstname,lastname,email,image,code,ip,status,date_added) VALUES (1,1,'admin','5feaa046f6927df3d744007ec1491dba838f672e','c4wnfrq9J','demo','user','admin@admin.com','none','none','none',1,'2019-01-31 06:29:09')" opencart
+              - sed -i "s/frontendiphere/$ip4/g" /var/www/opencart/config.php
+              - sed -i "s/dbiphere/$mysqlip/g" /var/www/opencart/config.php
+              - sed -i "s/usernamehere/$USER/g" /var/www/opencart/config.php
+              - sed -i "s/passwordhere/$PASS/g" /var/www/opencart/config.php
+              - sed -i "s/frontendiphere/$ip4/g" /var/www/opencart/admin/config.php
+              - sed -i "s/dbiphere/$mysqlip/g" /var/www/opencart/admin/config.php
+              - sed -i "s/usernamehere/$USER/g" /var/www/opencart/admin/config.php
+              - sed -i "s/passwordhere/$PASS/g" /var/www/opencart/admin/config.php
+              - systemctl reload apache2
+              - systemctl restart apache2
+              
+              ### Cloud-init script for agents
+              #----------------------- Install Telegraf Agent  -------------------------#
+              # download helper script
+              - cd /tmp
+              - wget --no-check-certificate https://10.138.242.69/downloads/salt/telegraf-utils.sh
+              - chmod 755 telegraf-utils.sh
+              #Install the agent
+              - ./telegraf-utils.sh product-managed -c 10.138.242.69 -t 37e94bc0-af7e-44eb-96f6-11fc27986339::b505175a-ce22-4b82-a3b0-e830997dfd2d -v 10.138.242.65 -k 1
+              #--------------------------------------------------------------------------#
+              #------------------------- Install Logs Agent  ----------------------------#
+              # download helper script
+              - cd /tmp
+              - wget --quiet http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              #Install the agent
+              - dpkg -i vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - export logs_ip="opslogs-a.vcf02.showcase.tmm.broadcom.lab"
+              - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
+              - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
+              - systemctl restart liagentd
+              - systemctl enable liagentd
+              #-------------------------------------------------------------------------#
+              - echo 'Cloud-init is done!' >> /tmp/finished.txt
+              
