@@ -1,0 +1,181 @@
+formatVersion: 2
+name: Web Servers
+description: Apache Web server
+version: 1
+inputs:
+  vm_name:
+    type: string
+    title: Virtual Machine Name
+    description: Enter a name for the Virtual Machine
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
+  storageClass:
+    type: string
+    title: Storage Class
+    $data: /data/storageclasses?namespace={{namespace}}
+  vm_size:
+    type: string
+    title: Virtual Machine Size
+    description: Select a Virtual Machine Size
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+  username:
+    type: string
+    description: The username you would like to have for the admin account.
+    default: demouser
+    title: Admin Username
+  password:
+    type: string
+    description: The password you would like to use for the admin account. Default is VMware123!VMware123!
+    title: Admin Password
+    default: VMware123!VMware123!
+    pattern: '[a-z0-9A-Z@#$]+'
+    encrypted: true
+resources:
+  Namespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${input.namespace}
+      existing: true
+  SSH_HTTP_LB:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachineService
+        metadata:
+          name: ${input.vm_name}
+        spec:
+          selector:
+            vm-lb-selector: ${input.vm_name}
+          type: LoadBalancer
+          ports:
+            - name: ssh
+              protocol: TCP
+              port: 22
+              targetPort: 22
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: 80
+  Web_VM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - Web_BOOTSTRAP
+      - SSH_HTTP_LB
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachine
+        metadata:
+          name: ${input.vm_name}
+          labels:
+            vm-selector: ${input.vm_name}
+            vm-lb-selector: ${input.vm_name}
+        spec:
+          className: ${input.vm_size}
+          #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
+          imageName: vmi-0185032cbc01db5c2
+          storageClass: ${input.storageClass}
+          powerState: PoweredOn
+          network:
+            domainName: site-a.vcf.lab
+            nameservers:
+              - 10.1.10.129
+            searchDomains:
+              - site-a.vcf.lab
+          bootstrap:
+            cloudInit:
+              rawCloudConfig:
+                name: ${input.vm_name}-bootstrap-secret
+                key: user-data
+  Web_BOOTSTRAP:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${input.vm_name}-bootstrap-secret
+          labels:
+            vm-selector: ${input.vm_name}
+        stringData:
+          user-data: |
+            #cloud-config
+            hostname: ${self.resourceName}
+            package_upgrade: true
+            package_reboot_if_required: true
+            apt_source:
+              - source: deb http://archive.ubuntu.com/ubuntu main universe multiverse restricted
+
+            packages:
+              - apache2
+              - unzip
+              - open-vm-tools
+
+            ssh_pwauth: true
+
+            users:
+              - name: ${input.username}
+                lock_passwd: false
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: [sudo]
+                shell: /bin/bash
+
+            chpasswd:
+              users:
+                - name: ${input.username}
+                  password: ${input.password}
+                  type: text
+              expire: false
+
+            runcmd:
+              ### update the top of the web page to the web servers resource name
+              - sed -i 's/Apache2 Ubuntu Default Page/SE Web Server ${input.vm_name}/g' /var/www/html/index.html
+              
+              ### Set to show detailed apache metrics with the telegraf agent
+              - sed -i '/Require local/a \\tRequire all granted' /etc/apache2/mods-enabled/status.conf
+              
+              ### Restart services
+              - systemctl reload apache2
+              - systemctl restart apache2
+              
+              - echo 'Apache Installed' >> /tmp/finished.txt
+                  
+              ### Cloud-init script for agents
+              #----------------------- Install Telegraf Agent  -------------------------#
+              # Download helper script
+              - wget -P /tmp/ --no-check-certificate https://${propgroup.environment.opscollector_01a}/downloads/salt/telegraf-utils.sh
+              - chmod 755 /tmp/telegraf-utils.sh
+              
+              # Get a token
+              #- curl -o /tmp/token.txt -k -H 'Content-Type: application/json' -d '{"username": "svc-ops-auto","authSource": "LOCAL","password": "VMware123^"}' 'https://ops-a.site-a.vcf.lab/suite-api/api/auth/token/acquire?_no_links=true'
+              # Convert the above curl to base64 to escape special characters in the password
+              - echo "Y3VybCAtbyAvdG1wL3Rva2VuLnR4dCAtayAtSCAnQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uJyAtZCAneyJ1c2VybmFtZSI6ICJzdmMtb3BzLWF1dG8iLCJhdXRoU291cmNlIjogIkxPQ0FMIiwicGFzc3dvcmQiOiAiVk13YXJlMTIzXiJ9JyAnaHR0cHM6Ly9vcHMtYS5zaXRlLWEudmNmLmxhYi9zdWl0ZS1hcGkvYXBpL2F1dGgvdG9rZW4vYWNxdWlyZT9fbm9fbGlua3M9dHJ1ZSc=" | base64 -d > /tmp/run_curl.sh
+              - chmod +x /tmp/run_curl.sh
+              - /tmp/run_curl.sh
+              - TOKEN=`cat /tmp/token.txt | grep -o '"token":"[^"]*"' | sed 's/"token":"\|"//g'`
+              
+              # Install the agent
+              - /tmp/telegraf-utils.sh product-managed -c ${propgroup.environment.opscollector_01a} -t $TOKEN -v ${propgroup.environment.ops_a} -k 1
+              - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
+              #--------------------------------------------------------------------------#
+              #------------------------- Install Logs Agent  ----------------------------#
+              # Download helper script
+              - wget -P /tmp/ --quiet http://${propgroup.environment.www}/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              
+              #Install the agent
+              - dpkg -i /tmp/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - export logs_ip="${propgroup.environment.opslogs_01a}"
+              - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
+              - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
+              - systemctl restart liagentd
+              - systemctl enable liagentd
+              - echo 'Logs Agent Installed' >> /tmp/finished.txt
+              #-------------------------------------------------------------------------#
+              - echo 'Cloud-init is done!' >> /tmp/finished.txt
