@@ -145,12 +145,11 @@ resources:
             runcmd:
               ### Cloud-init script for agents
               #----------------------- Install Telegraf Agent  -------------------------#
-              # download helper script
-              #- wget -P /tmp/ --no-check-certificate https://10.138.242.22/downloads/salt/telegraf-utils.sh
+              # Download helper script
               - wget -P /tmp/ --no-check-certificate https://opscollector-01a.site-a.vcf.lab/downloads/salt/telegraf-utils.sh
               - chmod 755 /tmp/telegraf-utils.sh
               
-              #Get a token
+              # Get a token
               #- curl -o /tmp/token.txt -k -H 'Content-Type: application/json' -d '{"username": "svc-ops-auto","authSource": "LOCAL","password": "VMware123^"}' 'https://ops-a.site-a.vcf.lab/suite-api/api/auth/token/acquire?_no_links=true'
               # Convert the above curl to base64 to escape special characters in the password
               - echo "Y3VybCAtbyAvdG1wL3Rva2VuLnR4dCAtayAtSCAnQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uJyAtZCAneyJ1c2VybmFtZSI6ICJzdmMtb3BzLWF1dG8iLCJhdXRoU291cmNlIjogIkxPQ0FMIiwicGFzc3dvcmQiOiAiVk13YXJlMTIzXiJ9JyAnaHR0cHM6Ly9vcHMtYS5zaXRlLWEudmNmLmxhYi9zdWl0ZS1hcGkvYXBpL2F1dGgvdG9rZW4vYWNxdWlyZT9fbm9fbGlua3M9dHJ1ZSc=" | base64 -d > /tmp/run_curl.sh
@@ -158,15 +157,16 @@ resources:
               - /tmp/run_curl.sh
               - TOKEN=`cat /tmp/token.txt | grep -o '"token":"[^"]*"' | sed 's/"token":"\|"//g'`
               
-              #Install the agent
+              # Install the agent
               - /tmp/telegraf-utils.sh product-managed -c 10.1.1.41 -t $TOKEN -v ops-a.site-a.vcf.lab -k 1
               - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
               #--------------------------------------------------------------------------#
               #------------------------- Install Logs Agent  ----------------------------#
-              # download helper script
+              # Download helper script
               - cd /tmp
               - wget --quiet http://10.138.241.6/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
-              #Install the agent
+              
+              # Install the agent
               - dpkg -i vmware-log-insight-agent_8.14.0-22552671_all.deb
               - export logs_ip="opslogs-a.site-a.vcf.lab"
               - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
