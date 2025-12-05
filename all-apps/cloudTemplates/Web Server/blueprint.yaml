@@ -79,15 +79,15 @@ resources:
         spec:
           className: ${input.vm_size}
           #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
-          imageName: vmi-0185032cbc01db5c2
+          imageName: ${propgroup.environment.ubuntu1804}
           storageClass: ${input.storageClass}
           powerState: PoweredOn
           network:
-            domainName: site-a.vcf.lab
+            domainName: ${propgroup.environment.domain}
             nameservers:
-              - 10.1.10.129
+              - ${propgroup.environment.nameserver1}
             searchDomains:
-              - site-a.vcf.lab
+              - ${propgroup.environment.domain}
           bootstrap:
             cloudInit:
               rawCloudConfig:
