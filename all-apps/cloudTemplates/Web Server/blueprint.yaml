@@ -87,7 +87,6 @@ resources:
             domainName: ${propgroup.environment.domain}
             nameservers:
               - ${propgroup.environment.nameserver1}
-              - ${propgroup.environment.nameserver2}
             searchDomains:
               - ${propgroup.environment.domain}
           bootstrap:
