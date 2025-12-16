@@ -3,15 +3,15 @@ name: Web Servers
 description: Deploy a Apache Web Server
 version: 1
 inputs:
-  namespace:
-    type: string
-    title: Namespace
-    $data: /data/namespaces
   web_vm_name:
     type: string
     title: Apache Virtual Machine Name
     description: Enter a name for the Web Virtual Machine
     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
   storageClass:
     type: string
     title: Storage Class
