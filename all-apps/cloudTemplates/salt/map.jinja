@@ -1,0 +1,14 @@
+{# Define default values for the Debian/Ubuntu family #}
+{% set os_map = salt['grains.filter_by']({
+    'Debian': {
+        'pkg': 'nginx',
+        'service': 'nginx',
+        'conf_file': '/etc/nginx/nginx.conf',
+        'conf_source': 'salt://nginx/files/nginx.conf',
+        'vhost_dir': '/etc/nginx/sites-enabled',
+        'user': 'www-data',
+    },
+}, grain='os_family', default='Debian') %}
+
+{# Export the variable for use in other files #}
+{% set nginx = os_map %}
