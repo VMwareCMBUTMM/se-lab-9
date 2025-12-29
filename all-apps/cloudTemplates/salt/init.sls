@@ -1,11 +1,9 @@
 {% from "nginx/map.jinja" import nginx with context %}
 
-# Install the Nginx package
 install_nginx:
   pkg.installed:
     - name: {{ nginx.pkg }}
 
-# Manage the main Nginx configuration
 manage_nginx_conf:
   file.managed:
     - name: {{ nginx.conf_file }}
@@ -17,7 +15,6 @@ manage_nginx_conf:
     - require:
       - pkg: install_nginx
 
-# Ensure Nginx service is running and watches for config changes
 run_nginx_service:
   service.running:
     - name: {{ nginx.service }}
